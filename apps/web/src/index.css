@@ -1,1 +1,24 @@
 @import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-neutral-950 text-neutral-100 font-sans antialiased selection:bg-indigo-500/30 selection:text-indigo-200;
+    min-height: 100vh;
+  }
+}
+
+/* Custom subtle scrollbar for dark mode chat panel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

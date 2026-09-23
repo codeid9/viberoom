@@ -2,44 +2,84 @@ import { Server, Socket } from 'socket.io';
 import Room from '../models/Room.js';
 import Message from '../models/Message.js';
 
-interface SendMessagePayload {
+interface JoinRoomPayload {
   roomId: string;
   senderName: string;
+}
+
+interface SendMessagePayload {
+  roomId: string;
   content: string;
 }
 
-export const registerRoomHandlers = (io: Server, socket: Socket): void => {
-  // 1. Handle join-room
-  socket.on('join-room', async (data: { roomId: string }) => {
-    try {
-      const { roomId } = data || {};
+// Helper to broadcast active socket count for a specific room
+const broadcastRoomUserCount = (io: Server, roomId: string): void => {
+  const roomSockets = io.sockets.adapter.rooms.get(roomId);
+  const count = roomSockets ? roomSockets.size : 0;
 
+  io.to(roomId).emit('room-users-updated', {
+    roomId,
+    count,
+  });
+};
+
+export const registerRoomHandlers = (io: Server, socket: Socket): void => {
+  // 1. Handle join-room with display name validation
+  socket.on('join-room', async (data: JoinRoomPayload) => {
+    try {
+      const { roomId, senderName } = data || {};
+
+      // Validate roomId
       if (!roomId || typeof roomId !== 'string') {
         socket.emit('room-error', { message: 'A valid roomId is required.' });
         return;
       }
 
+      // Backend name validation (Do not trust frontend alone)
+      if (!senderName || typeof senderName !== 'string') {
+        socket.emit('room-error', { message: 'A valid display name is required.' });
+        return;
+      }
+
+      const cleanName = senderName.trim();
+      if (cleanName.length < 3 || cleanName.length > 30) {
+        socket.emit('room-error', {
+          message: 'Display name must be between 3 and 30 characters.',
+        });
+        return;
+      }
+
+      // Verify room existence in MongoDB
       const existingRoom = await Room.findOne({ roomId });
       if (!existingRoom) {
         socket.emit('room-error', { message: 'Room not found. Invalid room ID.' });
         return;
       }
 
+      // Store validated display name on the socket instance
+      socket.data.senderName = cleanName;
+
+      // Add socket to the room channel
       socket.join(roomId);
 
+      // Acknowledge successful join
       socket.emit('room-joined', {
         roomId,
+        senderName: cleanName,
         message: `Successfully joined room ${roomId}`,
       });
 
-      console.log(`Socket ${socket.id} joined room: ${roomId}`);
+      console.log(`Socket ${socket.id} (${cleanName}) joined room: ${roomId}`);
+
+      // Broadcast updated online count to all members in this room
+      broadcastRoomUserCount(io, roomId);
     } catch (error) {
       console.error('Error in join-room handler:', error);
       socket.emit('room-error', { message: 'Internal server error while joining room.' });
     }
   });
 
-  // 2. Handle leave-room
+  // 2. Handle explicit leave-room
   socket.on('leave-room', (data: { roomId: string }) => {
     const { roomId } = data || {};
 
@@ -47,35 +87,30 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
       socket.leave(roomId);
       socket.emit('room-left', { roomId });
       console.log(`Socket ${socket.id} left room: ${roomId}`);
+      broadcastRoomUserCount(io, roomId);
     }
   });
 
-  // 3. Handle send-message
+  // 3. Handle send-message using the socket's verified senderName
   socket.on('send-message', async (data: SendMessagePayload) => {
     try {
-      const { roomId, senderName, content } = data || {};
+      const { roomId, content } = data || {};
 
-      // Input type validation
-      if (
-        typeof roomId !== 'string' ||
-        typeof senderName !== 'string' ||
-        typeof content !== 'string'
-      ) {
-        socket.emit('message-error', { message: 'Invalid message payload structure.' });
-        return;
-      }
-
-      // Input sanitization / trimming
-      const cleanSender = senderName.trim();
-      const cleanContent = content.trim();
-
-      if (cleanSender.length < 1 || cleanSender.length > 30) {
+      // Must be a joined user with an associated display name
+      const verifiedSenderName = socket.data.senderName;
+      if (!verifiedSenderName) {
         socket.emit('message-error', {
-          message: 'Sender name must be between 1 and 30 characters.',
+          message: 'Unauthorized: You must set a display name and join the room first.',
         });
         return;
       }
 
+      if (typeof roomId !== 'string' || typeof content !== 'string') {
+        socket.emit('message-error', { message: 'Invalid message payload.' });
+        return;
+      }
+
+      const cleanContent = content.trim();
       if (cleanContent.length < 1 || cleanContent.length > 1000) {
         socket.emit('message-error', {
           message: 'Message content must be between 1 and 1000 characters.',
@@ -83,15 +118,15 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Security check: Is this socket actually in this Socket.IO room?
+      // Security check: Ensure socket is actively joined to this room
       if (!socket.rooms.has(roomId)) {
         socket.emit('message-error', {
-          message: 'Unauthorized: You must join the room before sending messages.',
+          message: 'Unauthorized: You are not in this room channel.',
         });
         return;
       }
 
-      // Security check: Verify room still exists in DB and update activity
+      // Ensure room exists & update activity timestamp
       const room = await Room.findOneAndUpdate(
         { roomId },
         { lastActivityAt: new Date() },
@@ -103,14 +138,13 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Persist the message in MongoDB
+      // Persist the message with the socket's server-stored display name
       const savedMessage = await Message.create({
         roomId,
-        senderName: cleanSender,
+        senderName: verifiedSenderName,
         content: cleanContent,
       });
 
-      // Format payload for broadcast (stripping Mongoose internal __v)
       const broadcastPayload = {
         _id: savedMessage._id,
         roomId: savedMessage.roomId,
@@ -119,7 +153,6 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         createdAt: savedMessage.createdAt,
       };
 
-      // Broadcast to everyone in the room (including the sender)
       io.to(roomId).emit('new-message', broadcastPayload);
     } catch (error) {
       console.error('Error handling send-message:', error);
@@ -127,11 +160,18 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
     }
   });
 
-  // 4. Handle disconnect / cleanup
+  // 4. Handle disconnect and automatically notify rooms the socket left
   socket.on('disconnecting', () => {
     for (const room of socket.rooms) {
       if (room !== socket.id) {
-        console.log(`Socket ${socket.id} automatically left room: ${room} due to disconnect`);
+        console.log(`Socket ${socket.id} leaving room: ${room} on disconnect`);
+        // Calculate new count assuming this socket has left
+        const roomSockets = io.sockets.adapter.rooms.get(room);
+        const count = roomSockets ? Math.max(0, roomSockets.size - 1) : 0;
+        io.to(room).emit('room-users-updated', {
+          roomId: room,
+          count,
+        });
       }
     }
   });
