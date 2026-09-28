@@ -12,6 +12,15 @@ interface SendMessagePayload {
   content: string;
 }
 
+interface SetYouTubeVideoPayload {
+  roomId: string;
+  videoId: string | null;
+}
+
+// In-memory store for currently active YouTube video per room
+// Key: roomId, Value: videoId
+const roomVideos = new Map<string, string>();
+
 // Helper to broadcast active socket count for a specific room
 const broadcastRoomUserCount = (io: Server, roomId: string): void => {
   const roomSockets = io.sockets.adapter.rooms.get(roomId);
@@ -21,21 +30,24 @@ const broadcastRoomUserCount = (io: Server, roomId: string): void => {
     roomId,
     count,
   });
+
+  // If room is empty, clear in-memory video state
+  if (count === 0) {
+    roomVideos.delete(roomId);
+  }
 };
 
 export const registerRoomHandlers = (io: Server, socket: Socket): void => {
-  // 1. Handle join-room with display name validation
+  // 1. Handle join-room
   socket.on('join-room', async (data: JoinRoomPayload) => {
     try {
       const { roomId, senderName } = data || {};
 
-      // Validate roomId
       if (!roomId || typeof roomId !== 'string') {
         socket.emit('room-error', { message: 'A valid roomId is required.' });
         return;
       }
 
-      // Backend name validation (Do not trust frontend alone)
       if (!senderName || typeof senderName !== 'string') {
         socket.emit('room-error', { message: 'A valid display name is required.' });
         return;
@@ -49,20 +61,15 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Verify room existence in MongoDB
       const existingRoom = await Room.findOne({ roomId });
       if (!existingRoom) {
         socket.emit('room-error', { message: 'Room not found. Invalid room ID.' });
         return;
       }
 
-      // Store validated display name on the socket instance
       socket.data.senderName = cleanName;
-
-      // Add socket to the room channel
       socket.join(roomId);
 
-      // Acknowledge successful join
       socket.emit('room-joined', {
         roomId,
         senderName: cleanName,
@@ -71,15 +78,24 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
 
       console.log(`Socket ${socket.id} (${cleanName}) joined room: ${roomId}`);
 
-      // Broadcast updated online count to all members in this room
+      // Broadcast online count
       broadcastRoomUserCount(io, roomId);
+
+      // Send the currently playing video to this newly joined socket (if one exists)
+      const currentVideoId = roomVideos.get(roomId);
+      if (currentVideoId) {
+        socket.emit('youtube-video-changed', {
+          roomId,
+          videoId: currentVideoId,
+        });
+      }
     } catch (error) {
       console.error('Error in join-room handler:', error);
       socket.emit('room-error', { message: 'Internal server error while joining room.' });
     }
   });
 
-  // 2. Handle explicit leave-room
+  // 2. Handle leave-room
   socket.on('leave-room', (data: { roomId: string }) => {
     const { roomId } = data || {};
 
@@ -91,12 +107,57 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
     }
   });
 
-  // 3. Handle send-message using the socket's verified senderName
+  // 3. Handle set-youtube-video
+  socket.on('set-youtube-video', (data: SetYouTubeVideoPayload) => {
+    try {
+      const { roomId, videoId } = data || {};
+
+      if (!roomId || typeof roomId !== 'string') {
+        socket.emit('room-error', { message: 'A valid roomId is required.' });
+        return;
+      }
+
+      // Security check: Must be inside the room
+      if (!socket.rooms.has(roomId)) {
+        socket.emit('room-error', {
+          message: 'Unauthorized: You must join the room before changing the video.',
+        });
+        return;
+      }
+
+      // Validate videoId (must be a string of reasonable length or null to clear)
+      if (videoId !== null && (typeof videoId !== 'string' || videoId.trim().length === 0)) {
+        socket.emit('room-error', { message: 'Invalid video ID.' });
+        return;
+      }
+
+      const cleanVideoId = videoId ? videoId.trim() : null;
+
+      // Update in-memory state
+      if (cleanVideoId) {
+        roomVideos.set(roomId, cleanVideoId);
+      } else {
+        roomVideos.delete(roomId);
+      }
+
+      // Broadcast new video state to EVERYONE in this room (including sender)
+      io.to(roomId).emit('youtube-video-changed', {
+        roomId,
+        videoId: cleanVideoId,
+      });
+
+      console.log(`Room ${roomId} video changed to: ${cleanVideoId || 'cleared'}`);
+    } catch (error) {
+      console.error('Error in set-youtube-video handler:', error);
+      socket.emit('room-error', { message: 'Failed to update video.' });
+    }
+  });
+
+  // 4. Handle send-message
   socket.on('send-message', async (data: SendMessagePayload) => {
     try {
       const { roomId, content } = data || {};
 
-      // Must be a joined user with an associated display name
       const verifiedSenderName = socket.data.senderName;
       if (!verifiedSenderName) {
         socket.emit('message-error', {
@@ -118,7 +179,6 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Security check: Ensure socket is actively joined to this room
       if (!socket.rooms.has(roomId)) {
         socket.emit('message-error', {
           message: 'Unauthorized: You are not in this room channel.',
@@ -126,7 +186,6 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Ensure room exists & update activity timestamp
       const room = await Room.findOneAndUpdate(
         { roomId },
         { lastActivityAt: new Date() },
@@ -138,7 +197,6 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
         return;
       }
 
-      // Persist the message with the socket's server-stored display name
       const savedMessage = await Message.create({
         roomId,
         senderName: verifiedSenderName,
@@ -160,18 +218,21 @@ export const registerRoomHandlers = (io: Server, socket: Socket): void => {
     }
   });
 
-  // 4. Handle disconnect and automatically notify rooms the socket left
+  // 5. Handle disconnect
   socket.on('disconnecting', () => {
     for (const room of socket.rooms) {
       if (room !== socket.id) {
         console.log(`Socket ${socket.id} leaving room: ${room} on disconnect`);
-        // Calculate new count assuming this socket has left
         const roomSockets = io.sockets.adapter.rooms.get(room);
         const count = roomSockets ? Math.max(0, roomSockets.size - 1) : 0;
         io.to(room).emit('room-users-updated', {
           roomId: room,
           count,
         });
+
+        if (count === 0) {
+          roomVideos.delete(room);
+        }
       }
     }
   });

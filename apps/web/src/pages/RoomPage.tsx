@@ -11,12 +11,10 @@ export const RoomPage: React.FC = () => {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
 
-  // Retrieve existing session name if already entered in this tab session
   const [displayName, setDisplayName] = useState<string | null>(() => {
     return sessionStorage.getItem(`viberoom_name_${roomId}`) || null;
   });
 
-  // Socket connects only after displayName is provided
   const { socket, isConnected, isJoined, onlineCount, error } = useRoomSocket(
     roomId,
     displayName
@@ -38,10 +36,8 @@ export const RoomPage: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-neutral-950 overflow-hidden relative">
-      {/* Display name entry gate */}
       {!displayName && <JoinModal onJoin={handleJoinModalSubmit} />}
 
-      {/* Header bar with dynamic online count */}
       <RoomHeader
         roomId={roomId || 'unknown'}
         onlineCount={onlineCount}
@@ -60,7 +56,12 @@ export const RoomPage: React.FC = () => {
       )}
 
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
-        <VideoPanel />
+        {/* Pass socket props to VideoPanel */}
+        <VideoPanel
+          roomId={roomId || ''}
+          socket={socket}
+          isJoined={isJoined}
+        />
         <ChatPanel
           roomId={roomId || ''}
           socket={socket}
