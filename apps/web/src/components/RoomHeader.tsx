@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Button } from './Button';
+import { useAuth } from '../context/AuthContext';
 
 interface RoomHeaderProps {
   roomId: string;
@@ -17,6 +18,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   onLeave,
 }) => {
   const [copied, setCopied] = useState(false);
+  const { user, logout } = useAuth();
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -41,7 +43,20 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-2.5">
-        {/* Real-time connection badge */}
+        {/* User indicator */}
+        {user && (
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-950/60 border border-neutral-800 text-neutral-300 text-xs">
+            <span className="text-neutral-500">User:</span>
+            <span className="font-medium text-neutral-200">{user.username}</span>
+            {user.role === 'admin' && (
+              <span className="bg-indigo-950 text-indigo-300 border border-indigo-800/60 text-[10px] px-1 rounded font-semibold">
+                ADMIN
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Real-time online presence */}
         <div
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs border transition-colors ${
             isJoined
@@ -67,8 +82,12 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           {copied ? 'Copied!' : 'Copy Link'}
         </Button>
 
-        <Button variant="danger" size="sm" onClick={onLeave}>
+        <Button variant="ghost" size="sm" onClick={onLeave}>
           Leave
+        </Button>
+
+        <Button variant="danger" size="sm" onClick={() => logout()}>
+          Logout
         </Button>
       </div>
     </header>

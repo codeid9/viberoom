@@ -6,6 +6,7 @@ import { Server, Socket } from 'socket.io';
 import app from './app.js';
 import { connectDB } from './config/db.js';
 import { registerRoomHandlers } from './sockets/roomHandler.js';
+import { socketAuthMiddleware } from './sockets/authMiddleware.js';
 
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
@@ -20,13 +21,17 @@ const io = new Server(httpServer, {
   },
 });
 
+// Enforce session authentication on all incoming socket connections
+io.use(socketAuthMiddleware);
+
 io.on('connection', (socket: Socket) => {
-  console.log(`Socket connected: ${socket.id}`);
-  
+  const username = socket.data.user?.username || 'Unknown';
+  console.log(`Socket authenticated & connected: ${socket.id} (User: ${username})`);
+
   registerRoomHandlers(io, socket);
-  
+
   socket.on('disconnect', () => {
-    console.log(`Socket disconnected: ${socket.id}`);
+    console.log(`Socket disconnected: ${socket.id} (${username})`);
   });
 });
 
