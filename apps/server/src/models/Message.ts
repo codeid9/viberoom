@@ -35,5 +35,9 @@ const messageSchema = new Schema<IMessage>(
   }
 );
 
+// Indexes for cleanup and history retrieval
+messageSchema.index({ createdAt: 1 });
+messageSchema.index({ roomId: 1, createdAt: -1 });
+
 export const Message = model<IMessage>('Message', messageSchema);
 export default Message;

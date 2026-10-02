@@ -11,15 +11,14 @@ export interface AuthenticatedSocketUser {
   role: 'admin' | 'user';
 }
 
+// Extend Socket.IO's official SocketData interface
 declare module 'socket.io' {
-  interface Socket {
-    data: {
-      user?: AuthenticatedSocketUser;
-      senderName?: string;
-    };
+  interface SocketData {
+    user?: AuthenticatedSocketUser;
+    senderName?: string;
+    activeRoomId?: string;
   }
 }
-
 export const socketAuthMiddleware = async (
   socket: Socket,
   next: (err?: Error) => void
@@ -34,24 +33,32 @@ export const socketAuthMiddleware = async (
     const parsedCookies = cookie.parse(rawCookieHeader);
     const sessionToken = parsedCookies[SESSION_COOKIE_NAME];
 
-    if (!sessionToken) {
+    if (!sessionToken || typeof sessionToken !== 'string') {
       return next(new Error('Unauthorized: Session token missing'));
     }
 
+    // Hash the token to look up session in MongoDB
     const tokenHash = hashSessionToken(sessionToken);
     const session = await Session.findOne({ sessionIdHash: tokenHash });
 
-    if (!session || new Date() > session.expiresAt) {
+    if (!session) {
       return next(new Error('Unauthorized: Invalid or expired session'));
     }
 
+    if (new Date() > session.expiresAt) {
+      await Session.deleteOne({ _id: session._id });
+      return next(new Error('Unauthorized: Session expired'));
+    }
+
+    // Verify user exists and status is active
     const user = await User.findById(session.userId);
 
     if (!user || user.status !== 'active') {
       return next(new Error('Unauthorized: Account revoked or not found'));
     }
 
-    // Attach immutable identity to socket session
+    // Bind authoritative, server-verified identity to socket.data
+    // This can NEVER be overridden by client-sent payloads
     socket.data.user = {
       userId: user._id.toString(),
       username: user.username,

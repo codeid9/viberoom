@@ -11,7 +11,7 @@ export interface UseRoomSocketReturn {
   error: string | null;
 }
 
-export const useRoomSocket = (roomId?: string): UseRoomSocketReturn => {
+export const useRoomSocket = (roomId?: string, senderName?: string): UseRoomSocketReturn => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
@@ -24,9 +24,10 @@ export const useRoomSocket = (roomId?: string): UseRoomSocketReturn => {
       return;
     }
 
+    // Connect with credentials so session cookie is transmitted during handshake
     const socketInstance: Socket = io(SOCKET_SERVER_URL, {
       transports: ['websocket', 'polling'],
-      withCredentials: true, // Automatically transmits HttpOnly session cookie
+      withCredentials: true,
       autoConnect: true,
     });
 
@@ -35,7 +36,11 @@ export const useRoomSocket = (roomId?: string): UseRoomSocketReturn => {
     socketInstance.on('connect', () => {
       setIsConnected(true);
       setError(null);
-      socketInstance.emit('join-room', { roomId });
+      // Emit join-room with the authenticated username
+      socketInstance.emit('join-room', {
+        roomId,
+        senderName: senderName || '',
+      });
     });
 
     socketInstance.on('room-joined', () => {
@@ -60,6 +65,11 @@ export const useRoomSocket = (roomId?: string): UseRoomSocketReturn => {
       setError(err.message || 'Cannot reach the real-time server.');
     });
 
+    socketInstance.on('room-deleted', (data: { message?: string }) => {
+      setIsJoined(false);
+      setError(data?.message || 'This room has been closed.');
+    });
+
     socketInstance.on('disconnect', () => {
       setIsConnected(false);
       setIsJoined(false);
@@ -75,7 +85,7 @@ export const useRoomSocket = (roomId?: string): UseRoomSocketReturn => {
       setIsJoined(false);
       setIsConnected(false);
     };
-  }, [roomId]);
+  }, [roomId, senderName]);
 
   return {
     socket,
