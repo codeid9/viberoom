@@ -4,9 +4,9 @@ import User from '../models/User.js';
 import Session from '../models/Session.js';
 import { hashPassword } from '../utils/security.js';
 
-// Helper to validate MongoDB ObjectId
-const isValidObjectId = (id: string): boolean => {
-  return mongoose.Types.ObjectId.isValid(id);
+// Type guard: Validates that id is a valid 24-character hex MongoDB ObjectId string
+const isValidObjectId = (id: unknown): id is string => {
+  return typeof id === 'string' && mongoose.Types.ObjectId.isValid(id);
 };
 
 // 1. GET /api/admin/users
@@ -50,7 +50,6 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    // Alphanumeric + underscore check for clean URL-safe usernames
     if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
       res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores' });
       return;
@@ -61,17 +60,14 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    // Check if username already exists
     const existingUser = await User.findOne({ username: cleanUsername });
     if (existingUser) {
       res.status(409).json({ error: 'Username is already taken' });
       return;
     }
 
-    // Hash with Argon2id
     const passwordHash = await hashPassword(password);
 
-    // Enforce role: 'user' and status: 'active' strictly on the backend
     const newUser = await User.create({
       username: cleanUsername,
       passwordHash,
@@ -102,6 +98,7 @@ export const updateUserStatus = async (req: Request, res: Response): Promise<voi
     const { userId } = req.params;
     const { status } = req.body || {};
 
+    // Runtime type check and ObjectId validation
     if (!isValidObjectId(userId)) {
       res.status(400).json({ error: 'Invalid user ID format' });
       return;
@@ -112,7 +109,6 @@ export const updateUserStatus = async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Prevent admin from revoking their own account
     if (req.user && req.user._id.toString() === userId) {
       res.status(400).json({ error: 'You cannot revoke your own account' });
       return;
@@ -127,7 +123,6 @@ export const updateUserStatus = async (req: Request, res: Response): Promise<voi
     targetUser.status = status;
     await targetUser.save();
 
-    // Invalidate all active sessions if user is revoked
     if (status === 'revoked') {
       await Session.deleteMany({ userId: targetUser._id });
     }
@@ -155,6 +150,7 @@ export const resetUserPassword = async (req: Request, res: Response): Promise<vo
     const { userId } = req.params;
     const { password } = req.body || {};
 
+    // Runtime type check and ObjectId validation
     if (!isValidObjectId(userId)) {
       res.status(400).json({ error: 'Invalid user ID format' });
       return;
@@ -171,11 +167,9 @@ export const resetUserPassword = async (req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Hash with Argon2id
     targetUser.passwordHash = await hashPassword(password);
     await targetUser.save();
 
-    // Invalidate all active sessions so old sessions cannot continue using the account
     await Session.deleteMany({ userId: targetUser._id });
 
     res.status(200).json({
@@ -192,12 +186,12 @@ export const deleteUser = async (req: Request, res: Response): Promise<void> => 
   try {
     const { userId } = req.params;
 
+    // Runtime type check and ObjectId validation
     if (!isValidObjectId(userId)) {
       res.status(400).json({ error: 'Invalid user ID format' });
       return;
     }
 
-    // Guard: Prevent admin from deleting themselves
     if (req.user && req.user._id.toString() === userId) {
       res.status(400).json({ error: 'You cannot delete your own admin account' });
       return;
@@ -209,13 +203,11 @@ export const deleteUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    // Guard: Prevent deleting another admin account
     if (targetUser.role === 'admin') {
       res.status(403).json({ error: 'Administrative accounts cannot be deleted through this endpoint' });
       return;
     }
 
-    // Invalidate all sessions before deleting the user document
     await Session.deleteMany({ userId: targetUser._id });
     await User.deleteOne({ _id: targetUser._id });
 
