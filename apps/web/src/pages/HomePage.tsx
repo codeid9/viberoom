@@ -2,22 +2,23 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { createRoom } from '../services/roomService';
+import { useAuth } from '../context/AuthContext';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [joinRoomId, setJoinRoomId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleCreateRoom = async () => {
-    if (isCreating) return; // Guard against accidental repeated clicks
+    if (isCreating) return;
 
     setIsCreating(true);
     setErrorMessage(null);
 
     try {
       const data = await createRoom();
-      // Navigate dynamically using the backend-generated roomId
       navigate(`/room/${data.roomId}`);
     } catch (error) {
       console.error('Error creating room:', error);
@@ -36,7 +37,6 @@ export const HomePage: React.FC = () => {
     const trimmedInput = joinRoomId.trim();
     if (!trimmedInput) return;
 
-    // Handle full URLs pasted in or raw room IDs
     const extractedRoomId = trimmedInput.includes('/room/')
       ? trimmedInput.split('/room/')[1]?.split(/[?#]/)[0]
       : trimmedInput;
@@ -47,14 +47,29 @@ export const HomePage: React.FC = () => {
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden">
-      {/* Background ambient radial gradients */}
+    <main className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden bg-neutral-950">
+      {/* Top action bar */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        {user?.role === 'admin' && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate('/admin')}
+            className="text-xs"
+          >
+            Admin Panel
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={() => logout()} className="text-xs">
+          Logout ({user?.username})
+        </Button>
+      </div>
+
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 left-1/3 w-80 h-80 bg-violet-600/10 rounded-full blur-3xl pointer-events-none" />
 
       <div className="w-full max-w-md flex flex-col items-center text-center z-10">
-        {/* Branding icon */}
-        <div className="w-14 h-14 rounded-2xl bg-linear-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-2xl font-bold text-white shadow-xl shadow-indigo-600/25 mb-6">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-2xl font-bold text-white shadow-xl shadow-indigo-600/25 mb-6">
           V
         </div>
 
@@ -65,9 +80,7 @@ export const HomePage: React.FC = () => {
           Your private space to hang out.
         </p>
 
-        {/* Card container */}
         <div className="w-full bg-neutral-900/60 border border-neutral-800/80 p-6 rounded-2xl backdrop-blur-sm shadow-xl flex flex-col gap-5">
-          {/* Error Banner */}
           {errorMessage && (
             <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-rose-300 text-xs text-left animate-fadeIn">
               {errorMessage}
@@ -91,9 +104,9 @@ export const HomePage: React.FC = () => {
           </Button>
 
           <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-neutral-800" />
+            <div className="flex-1 h-[1px] bg-neutral-800" />
             <span className="text-xs text-neutral-500 uppercase tracking-wider">or</span>
-            <div className="flex-1 h-px bg-neutral-800" />
+            <div className="flex-1 h-[1px] bg-neutral-800" />
           </div>
 
           <form onSubmit={handleJoinRoom} className="flex flex-col gap-3">
@@ -118,10 +131,6 @@ export const HomePage: React.FC = () => {
             </Button>
           </form>
         </div>
-
-        <p className="mt-8 text-xs text-neutral-600">
-          No sign up required. Create a room and share the link.
-        </p>
       </div>
     </main>
   );

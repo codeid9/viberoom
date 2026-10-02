@@ -11,7 +11,7 @@ export interface UseRoomSocketReturn {
   error: string | null;
 }
 
-export const useRoomSocket = (roomId?: string, senderName?: string | null): UseRoomSocketReturn => {
+export const useRoomSocket = (roomId?: string, senderName?: string): UseRoomSocketReturn => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
@@ -19,16 +19,12 @@ export const useRoomSocket = (roomId?: string, senderName?: string | null): UseR
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Do not initiate socket connection until both roomId and a valid senderName exist
     if (!roomId) {
       setError('Invalid or missing Room ID.');
       return;
     }
 
-    if (!senderName || senderName.trim().length < 3) {
-      return;
-    }
-
+    // Connect with credentials so session cookie is transmitted during handshake
     const socketInstance: Socket = io(SOCKET_SERVER_URL, {
       transports: ['websocket', 'polling'],
       withCredentials: true,
@@ -40,10 +36,10 @@ export const useRoomSocket = (roomId?: string, senderName?: string | null): UseR
     socketInstance.on('connect', () => {
       setIsConnected(true);
       setError(null);
-      // Send both roomId and verified display name
+      // Emit join-room with the authenticated username
       socketInstance.emit('join-room', {
         roomId,
-        senderName: senderName.trim(),
+        senderName: senderName || '',
       });
     });
 
@@ -63,10 +59,15 @@ export const useRoomSocket = (roomId?: string, senderName?: string | null): UseR
       setError(err?.message || 'Failed to join room.');
     });
 
-    socketInstance.on('connect_error', () => {
+    socketInstance.on('connect_error', (err) => {
       setIsConnected(false);
       setIsJoined(false);
-      setError('Cannot reach the real-time server. Reconnecting...');
+      setError(err.message || 'Cannot reach the real-time server.');
+    });
+
+    socketInstance.on('room-deleted', (data: { message?: string }) => {
+      setIsJoined(false);
+      setError(data?.message || 'This room has been closed.');
     });
 
     socketInstance.on('disconnect', () => {
